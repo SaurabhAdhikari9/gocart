@@ -23,9 +23,6 @@ jobs:
     
     - name: Run build
       run: npm run build
-    
-    - name: build image
-      run: sudo docker compose build
 
   deploy:
     runs-on: ubuntu-latest
