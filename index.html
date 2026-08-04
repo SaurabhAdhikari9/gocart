@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Weight Normalization Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+
+        .math-font {
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        .progress-bar-bg {
+            background-color: #e2e8f0;
+        }
+
+        .progress-bar-fill {
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+
+<body class="h-screen w-full flex flex-col md:flex-row overflow-hidden">
+
+    <!-- Admin Controls Sidebar -->
+    <div class="w-full md:w-1/3 h-1/2 md:h-full flex flex-col p-4 space-y-4 z-10">
+        <div class="glass-panel rounded-2xl flex-1 flex flex-col overflow-hidden">
+            <div class="p-4 border-b border-slate-200 bg-white">
+                <h2 class="text-lg font-bold text-slate-800 flex items-center">
+                    <span class="material-icons mr-2 text-indigo-600">admin_panel_settings</span>
+                    Admin Question Portal
+                </h2>
+                <p class="text-xs text-slate-500 mt-1">Simulate adding dynamic criteria.</p>
+            </div>
+
+            <div id="questions-container" class="flex-1 overflow-y-auto p-4 space-y-3">
+                <!-- Question cards will be injected here -->
+            </div>
+
+            <div class="p-4 border-t border-slate-200 bg-slate-50">
+                <button id="add-btn"
+                    class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center">
+                    <span class="material-icons text-sm mr-2">add</span> Add New Question
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Output / Visualization Area -->
+    <div class="w-full md:w-2/3 h-1/2 md:h-full p-4 flex flex-col space-y-4">
+
+        <!-- Math Calculation HUD -->
+        <div class="glass-panel rounded-2xl p-6 flex flex-col justify-center bg-white shadow-sm">
+            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Underlying Math Engine</h3>
+
+            <div class="flex flex-col md:flex-row gap-6 items-center w-full">
+                <div class="flex-1 w-full bg-slate-50 p-4 rounded-xl border border-slate-100">
+                    <div class="text-xs text-slate-500 mb-1">Step 1: Total Raw Weight (Denominator)</div>
+                    <div class="math-font text-2xl font-bold text-slate-800" id="math-denominator">∑ W = 0</div>
+                </div>
+
+                <span class="material-icons text-slate-300 hidden md:block">arrow_forward</span>
+
+                <div class="flex-1 w-full bg-slate-50 p-4 rounded-xl border border-slate-100">
+                    <div class="text-xs text-slate-500 mb-1">Step 2: Relative Weight Guarantee</div>
+                    <div class="math-font text-2xl font-bold text-emerald-600" id="math-total">∑ RW = 100%</div>
+                </div>
+            </div>
+
+            <div class="mt-4 text-sm text-slate-600">
+                Because the math dynamically calculates <span class="math-font bg-slate-100 px-1 rounded">W_i /
+                    Total_W</span>, the final score will always perfectly scale from 0% to 100%, no matter how many
+                questions exist.
+            </div>
+        </div>
+
+        <!-- D3 Bar Chart Area -->
+        <div class="glass-panel rounded-2xl flex-1 flex flex-col p-4 bg-white relative overflow-hidden">
+            <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-2">Relative Weight Distribution
+            </h3>
+            <div id="chart-container" class="flex-1 w-full h-full"></div>
+            <!-- Legend -->
+            <div
+                class="absolute bottom-4 right-4 flex items-center space-x-2 text-xs text-slate-500 bg-white/80 p-2 rounded-md shadow-sm border border-slate-100">
+                <div class="w-3 h-3 rounded-sm bg-indigo-500"></div><span>Question Weight</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Data State
+        let questions = [
+            { id: 'q1', name: 'Budget Match', rawWeight: 10, color: '#6366f1' }, // Indigo
+            { id: 'q2', name: 'Climate Preference', rawWeight: 5, color: '#3b82f6' }, // Blue
+            { id: 'q3', name: 'Campus Type', rawWeight: 5, color: '#0ea5e9' }  // Sky
+        ];
+
+        let qCounter = 3;
+        const colors = ['#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6', '#10b981', '#84cc16'];
+
+        // DOM Elements
+        const container = document.getElementById('questions-container');
+        const denomEl = document.getElementById('math-denominator');
+        const totalEl = document.getElementById('math-total');
+        const chartContainer = document.getElementById('chart-container');
+
+        // Initialize D3 Chart variables
+        let svg, x, y, width, height, chartGroup;
+
+        function initChart() {
+            const rect = chartContainer.getBoundingClientRect();
+            width = rect.width;
+            height = rect.height;
+            const margin = { top: 20, right: 30, bottom: 40, left: 120 };
+
+            svg = d3.select("#chart-container")
+                .append("svg")
+                .attr("width", "100%")
+                .attr("height", "100%")
+                .attr("viewBox", `0 0 ${width} ${height}`)
+                .attr("preserveAspectRatio", "xMidYMid meet");
+
+            chartGroup = svg.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            x = d3.scaleLinear().range([0, width - margin.left - margin.right]);
+            y = d3.scaleBand().range([0, height - margin.top - margin.bottom]).padding(0.2);
+
+            chartGroup.append("g")
+                .attr("class", "x-axis")
+                .attr("transform", `translate(0,${height - margin.top - margin.bottom})`);
+
+            chartGroup.append("g")
+                .attr("class", "y-axis")
+                .style("font-size", "12px")
+                .style("font-family", "Inter");
+        }
+
+        function updateEngine() {
+            // 1. Math Engine Calculation
+            const totalRawWeight = questions.reduce((sum, q) => sum + q.rawWeight, 0);
+
+            // Calculate relative weights
+            const normalizedData = questions.map(q => {
+                const relativePct = totalRawWeight > 0 ? (q.rawWeight / totalRawWeight) * 100 : 0;
+                return {
+                    ...q,
+                    relativePct: relativePct
+                };
+            });
+
+            // Update HUD text
+            denomEl.innerHTML = `∑ W = ${totalRawWeight}`;
+            if (totalRawWeight === 0) {
+                totalEl.innerHTML = `∑ RW = 0%`;
+                totalEl.className = "math-font text-2xl font-bold text-slate-400";
+            } else {
+                totalEl.innerHTML = `∑ RW = 100%`;
+                totalEl.className = "math-font text-2xl font-bold text-emerald-600";
+            }
+
+            // 2. Render Admin UI
+            container.innerHTML = '';
+            normalizedData.forEach((q, index) => {
+                const card = document.createElement('div');
+                card.className = "bg-white border border-slate-200 rounded-xl p-4 shadow-sm relative";
+
+                card.innerHTML = `
+                    <button class="delete-btn absolute top-3 right-3 text-slate-400 hover:text-red-500 transition-colors" data-index="${index}">
+                        <span class="material-icons text-sm">close</span>
+                    </button>
+                    <div class="font-medium text-slate-700 text-sm mb-2">${q.name}</div>
+                    
+                    <div class="flex items-center space-x-4 mb-2">
+                        <div class="flex-1">
+                            <label class="text-xs text-slate-500 mb-1 block">Raw Weight (Admin Input)</label>
+                            <input type="range" min="0" max="20" value="${q.rawWeight}" class="w-full accent-indigo-600 weight-slider" data-index="${index}">
+                        </div>
+                        <div class="w-12 text-center bg-slate-100 rounded p-1 font-mono text-sm font-bold text-slate-700">
+                            ${q.rawWeight}
+                        </div>
+                    </div>
+
+                    <div class="mt-3 bg-slate-50 rounded-lg p-2 border border-slate-100 flex items-center justify-between">
+                        <span class="text-xs text-slate-500">Calculated Power:</span>
+                        <span class="text-sm font-bold text-emerald-600">${q.relativePct.toFixed(1)}%</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+
+            // Attach event listeners
+            document.querySelectorAll('.weight-slider').forEach(slider => {
+                slider.addEventListener('input', (e) => {
+                    const idx = parseInt(e.target.getAttribute('data-index'));
+                    questions[idx].rawWeight = parseInt(e.target.value);
+                    updateEngine();
+                });
+            });
+
+            document.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const idx = parseInt(e.currentTarget.getAttribute('data-index'));
+                    questions.splice(idx, 1);
+                    updateEngine();
+                });
+            });
+
+            // 3. Update D3 Chart
+            updateChart(normalizedData);
+        }
+
+        function updateChart(data) {
+            const margin = { top: 20, right: 30, bottom: 40, left: 120 };
+            const innerWidth = width - margin.left - margin.right;
+            const innerHeight = height - margin.top - margin.bottom;
+
+            x.domain([0, 100]); // Always 0 to 100%
+            y.domain(data.map(d => d.name));
+
+            // Axes
+            chartGroup.select(".x-axis")
+                .transition().duration(400)
+                .call(d3.axisBottom(x).ticks(5).tickFormat(d => d + "%"));
+
+            // Remove domain line for cleaner look
+            chartGroup.select(".x-axis .domain").remove();
+
+            chartGroup.select(".y-axis")
+                .transition().duration(400)
+                .call(d3.axisLeft(y).tickSize(0))
+                .selectAll("text")
+                .style("fill", "#64748b")
+                .style("font-weight", "500");
+
+            chartGroup.select(".y-axis .domain").remove();
+
+            // Bars
+            const bars = chartGroup.selectAll(".bar")
+                .data(data, d => d.id);
+
+            bars.exit()
+                .transition()
+                .duration(300)
+                .attr("width", 0)
+                .style("opacity", 0)
+                .remove();
+
+            const barsEnter = bars.enter()
+                .append("rect")
+                .attr("class", "bar")
+                .attr("y", d => y(d.name))
+                .attr("height", y.bandwidth())
+                .attr("x", 0)
+                .attr("width", 0)
+                .attr("fill", d => d.color)
+                .attr("rx", 4);
+
+            bars.merge(barsEnter)
+                .transition()
+                .duration(500)
+                .ease(d3.easeCubicOut)
+                .attr("y", d => y(d.name))
+                .attr("height", y.bandwidth())
+                .attr("width", d => x(d.relativePct))
+                .attr("fill", d => d.color);
+
+            // Labels on bars
+            const labels = chartGroup.selectAll(".bar-label")
+                .data(data, d => d.id);
+
+            labels.exit().remove();
+
+            const labelsEnter = labels.enter()
+                .append("text")
+                .attr("class", "bar-label")
+                .attr("y", d => y(d.name) + y.bandwidth() / 2)
+                .attr("x", 5)
+                .attr("dy", ".35em")
+                .style("fill", "white")
+                .style("font-size", "11px")
+                .style("font-weight", "bold")
+                .style("font-family", "Inter")
+                .style("pointer-events", "none");
+
+            labels.merge(labelsEnter)
+                .transition()
+                .duration(500)
+                .ease(d3.easeCubicOut)
+                .attr("y", d => y(d.name) + y.bandwidth() / 2)
+                .attr("x", d => Math.max(5, x(d.relativePct) - 45)) // Keep label inside or just outside
+                .text(d => d.relativePct > 0 ? d.relativePct.toFixed(1) + "%" : "")
+                .style("fill", d => x(d.relativePct) > 50 ? "white" : (d.relativePct > 0 ? "#334155" : "transparent"))
+                .attr("x", d => x(d.relativePct) > 50 ? x(d.relativePct) - 45 : x(d.relativePct) + 5);
+        }
+
+        document.getElementById('add-btn').addEventListener('click', () => {
+            qCounter++;
+            questions.push({
+                id: `q${qCounter}`,
+                name: `Dynamic Custom Query ${qCounter}`,
+                rawWeight: 5,
+                color: colors[qCounter % colors.length]
+            });
+            updateEngine();
+        });
+
+        // Handle window resize for D3
+        window.addEventListener('resize', () => {
+            if (chartContainer.clientWidth > 0) {
+                d3.select("#chart-container svg").remove();
+                initChart();
+                updateChart(questions.map(q => {
+                    const total = questions.reduce((sum, qq) => sum + qq.rawWeight, 0);
+                    return { ...q, relativePct: total > 0 ? (q.rawWeight / total) * 100 : 0 };
+                }));
+            }
+        });
+
+        // Initial setup
+        setTimeout(() => {
+            initChart();
+            updateEngine();
+        }, 100);
+
+    </script>
+</body>
+
+</html>
